@@ -1,6 +1,8 @@
 # Factory
 
-Personal Docker workshop for Node 22, Python, and Cursor Agent (`agent`). This is not an ISO of Fazione. It is not Kali. It is not GUI Cursor.
+Personal Docker workshop for Node 22, Python, Cursor Agent (`agent`), Codex, Grok Build, and OpenCode. This is not an ISO of Fazione. It is not Kali. It is not GUI Cursor.
+
+`agent` is Cursor. Grok’s extra `agent` binary is removed; call Grok as `grok`.
 
 ## Host
 
@@ -19,11 +21,11 @@ bash /workspace/setup.sh
 Then:
 
 ```bash
-node -v && npm -v && python3 -V && git --version && agent --version
+node -v && npm -v && python3 -V && git --version && agent --version && codex --version && grok --version && opencode --version
 ```
 
 (`python3 -V` is the version flag.)
 
-Auth is yours: `agent login` or `CURSOR_API_KEY`. The script does not store secrets.
+Auth is yours. The script does not store secrets.
 
 Re-run `setup.sh` anytime; it skips work that is already done.

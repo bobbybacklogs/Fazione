@@ -6,7 +6,8 @@
 # then:
 #   bash /workspace/setup.sh
 #
-# Success: node -v && npm -v && python3 -V && git --version && agent --version
+# Success: node -v && python3 -V && git --version && agent --version
+#          && codex --version && grok --version && opencode --version
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -44,6 +45,7 @@ apt_base() {
     tar \
     gzip \
     xz-utils \
+    zstd \
     jq \
     tmux \
     build-essential \
@@ -112,12 +114,12 @@ install_node_22() {
 path_files() {
   mkdir -p /etc/profile.d /root
   cat >/etc/profile.d/agent-os-factory.sh <<'EOF'
-# Agent OS factory: official Node prefix + Cursor CLI
-export PATH="/usr/local/bin:${HOME}/.local/bin:${PATH}"
+# Cursor `agent` must win over Grok's extra `agent` symlink in ~/.grok/bin.
+export PATH="/usr/local/bin:${HOME}/.local/bin:${HOME}/.grok/bin:${HOME}/.opencode/bin:${PATH}"
 EOF
   chmod 644 /etc/profile.d/agent-os-factory.sh
 
-  local line='export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"'
+  local line='export PATH="$HOME/.local/bin:$HOME/.grok/bin:/usr/local/bin:$PATH"'
   touch /root/.bashrc
   if ! grep -Fqx "$line" /root/.bashrc; then
     printf '\n# Cursor Agent (factory)\n%s\n' "$line" >> /root/.bashrc
@@ -131,7 +133,7 @@ EOF
 
 install_cursor_agent() {
   export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
-  if have agent; then
+  if have agent && agent --version >/dev/null 2>&1; then
     log "Cursor Agent already on PATH ($(agent --version 2>/dev/null | head -n1)) — skip installer"
     return 0
   fi
@@ -139,18 +141,134 @@ install_cursor_agent() {
   curl -fsS "$CURSOR_INSTALL_URL" | bash
 }
 
-verify() {
+# Grok's installer also links `agent`; this factory's `agent` is Cursor CLI.
+protect_cursor_agent() {
+  local target candidate
+  mkdir -p "${HOME}/.local/bin"
+  rm -f "${HOME}/.grok/bin/agent"
+  for candidate in "${HOME}/.local/bin/agent" /usr/local/bin/agent; do
+    [[ -e "$candidate" || -L "$candidate" ]] || continue
+    target="$(readlink -f "$candidate" 2>/dev/null || true)"
+    if [[ "$target" == *grok* ]] || [[ "$target" == *'/.grok/'* ]]; then
+      log "removing Grok's $candidate so Cursor Agent keeps the name agent"
+      rm -f "$candidate"
+    fi
+  done
+}
+
+install_codex() {
   export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
+  if have codex && codex --version >/dev/null 2>&1; then
+    log "Codex already on PATH ($(codex --version 2>/dev/null | head -n1)) — skip"
+    return 0
+  fi
+  log "OpenAI Codex CLI"
+  local script
+  script="$(mktemp)"
+  if curl -fsSL https://chatgpt.com/codex/install.sh -o "$script" && bash "$script"; then
+    rm -f "$script"
+    hash -r || true
+    if have codex; then
+      return 0
+    fi
+  fi
+  rm -f "$script"
+  log "Codex installer script failed — npm @openai/codex"
+  npm install -g @openai/codex
+}
+
+install_grok() {
+  export PATH="${HOME}/.local/bin:${HOME}/.grok/bin:/usr/local/bin:${PATH}"
+  if have grok && { grok --version >/dev/null 2>&1 || grok version >/dev/null 2>&1; }; then
+    log "Grok already on PATH ($(grok --version 2>/dev/null || grok version 2>/dev/null | head -n1)) — skip"
+    protect_cursor_agent
+    return 0
+  fi
+  log "xAI Grok Build CLI"
+  local script
+  script="$(mktemp)"
+  if curl -fsSL https://x.ai/cli/install.sh -o "$script" && bash "$script"; then
+    rm -f "$script"
+    hash -r || true
+  else
+    rm -f "$script"
+  fi
+  if ! have grok; then
+    log "Grok curl installer missed PATH — npm @xai-official/grok"
+    npm install -g @xai-official/grok
+  fi
+  protect_cursor_agent
+}
+
+install_opencode() {
+  export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
+  if have opencode && opencode --version >/dev/null 2>&1; then
+    log "OpenCode already on PATH ($(opencode --version 2>/dev/null | head -n1)) — skip"
+    return 0
+  fi
+  log "OpenCode CLI"
+  export XDG_BIN_DIR="${HOME}/.local/bin"
+  mkdir -p "$XDG_BIN_DIR"
+  local script
+  script="$(mktemp)"
+  if curl -fsSL https://opencode.ai/install -o "$script" && bash "$script"; then
+    rm -f "$script"
+    hash -r || true
+    export PATH="${HOME}/.local/bin:${HOME}/.opencode/bin:/usr/local/bin:${PATH}"
+    if have opencode; then
+      return 0
+    fi
+    if [[ -x "${HOME}/.local/bin/opencode" || -x "${HOME}/.opencode/bin/opencode" ]]; then
+      return 0
+    fi
+  fi
+  rm -f "$script"
+  log "OpenCode installer script failed — npm opencode-ai"
+  npm install -g opencode-ai
+}
+
+tool_ok() {
+  local name="$1"
+  shift
+  if ! have "$name"; then
+    echo "missing on PATH: $name" >&2
+    return 1
+  fi
+  if "$@" >/dev/null 2>&1; then
+    "$@"
+    return 0
+  fi
+  echo "$name did not accept version flag" >&2
+  return 1
+}
+
+verify() {
+  export PATH="${HOME}/.local/bin:${HOME}/.grok/bin:/usr/local/bin:${PATH}"
+  protect_cursor_agent
+  hash -r || true
   log "verify"
   node -v
   npm -v
   python3 -V
   git --version
   agent --version
+  tool_ok codex codex --version
+  if have grok && grok --version >/dev/null 2>&1; then
+    grok --version
+  else
+    tool_ok grok grok version
+  fi
+  tool_ok opencode opencode --version
   local major
   major="$(node_major)"
   if [[ "$major" != "$NODE_MAJOR" ]]; then
     echo "Node major is $major, expected $NODE_MAJOR" >&2
+    exit 1
+  fi
+  local agent_path
+  agent_path="$(command -v agent)"
+  if [[ "$(readlink -f "$agent_path" 2>/dev/null || echo "$agent_path")" == *grok* ]]; then
+    echo "agent on PATH is Grok, not Cursor CLI" >&2
     exit 1
   fi
 }
@@ -161,9 +279,13 @@ main() {
   path_files
   install_node_22
   install_cursor_agent
+  install_codex
+  install_grok
+  install_opencode
+  protect_cursor_agent
   path_files
   verify
-  log "factory ready. Auth is yours: agent login   (do not put keys in this script)"
+  log "factory ready. Auth is yours (agent login / grok login / codex / opencode). No keys in this script."
 }
 
 main "$@"
